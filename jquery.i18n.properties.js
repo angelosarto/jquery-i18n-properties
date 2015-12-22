@@ -45,6 +45,8 @@
    * @param  cache        (boolean, optional) whether bundles should be cached by the browser, or forcibly reloaded on each page load. Defaults to false (i.e. forcibly reloaded)
    * @param  encoding  (string, optional) the encoding to request for bundles. Property file resource bundles are specified to be in ISO-8859-1 format. Defaults to UTF-8 for backward compatibility.
    * @param  callback     (function, optional) callback function to be called after script is terminated
+   * @param  pouch      (pouchDB instance, optional) If a pouch database is supplied language list and translations will be loaded from pouch instead of via ajax.
+   * @param  pouch_doc_prefix (string, optional) If pouch is used the language list will be loaded from prefix+'languages' and language files will be looked up as prefix+'language_code'
    */
   $.i18n.properties = function (settings) {
     // set up settings
@@ -55,7 +57,9 @@
       mode: 'vars',
       cache: false,
       encoding: 'UTF-8',
-      callback: null
+      callback: null,
+      pouch: null,
+      pouch_doc_prefix: 'i18n_'
     };
     settings = $.extend(defaults, settings);
     if (settings.language === null || settings.language == '') {
@@ -65,47 +69,61 @@
       settings.language = '';
     }
 
-    var indexFileUrl = settings.path + 'languages.json';
-
     var languages = [];
+    if (settings.pouch != null)
+    {
 
-    $.ajax({
-      url: indexFileUrl,
-      async: false,
-      cache: false,
-      success: function (data, status) {
+      var doc = settings.pouch_doc_prefix + 'languages';
+      settings.pouch.get(doc).then( function (data)
+      {
+        languages = data.languages;
+        loadFiles(settings, languages);
+      })
+    }
+    else {
+      var indexFileUrl = settings.path + 'languages.json';
+
+      $.ajax({
+        url: indexFileUrl,
+        async: false,
+        cache: false,
+        success: function (data, status) {
           languages = data.languages;
+        }
+      });
+
+      if (!languages) {
+        languages = [];
       }
-    });
-    
-    if (!languages) {
-      languages = [];
+      loadFiles(settings, languages);
     }
 
-    // load and parse bundle files
-    var files = getFiles(settings.name);
-    for (var i = 0; i < files.length; i++) {
-      // 1. load base (eg, Messages.properties)
-      loadAndParseFile(settings.path + files[i] + '.properties', settings);
-      // 2. with language code (eg, Messages_pt.properties)
-      if (settings.language.length >= 2) {
-        var shortCode = settings.language.substring(0, 2);
-        if (languages.length > 0 && $.inArray(shortCode, languages) != -1) {
-            loadAndParseFile(settings.path + files[i] + '_' + shortCode + '.properties', settings);
+    function loadFiles(settings, languages) {
+      // load and parse bundle files
+      var files = getFiles(settings.name);
+      for (var i = 0; i < files.length; i++) {
+        // 1. load base (eg, Messages.properties)
+        loadAndParseFile(files[i], settings);
+        // 2. with language code (eg, Messages_pt.properties)
+        if (settings.language.length >= 2) {
+          var shortCode = settings.language.substring(0, 2);
+          if (languages.length > 0 && $.inArray(shortCode, languages) != -1) {
+            loadAndParseFile(files[i] + '_' + shortCode, settings);
+          }
+        }
+        // 3. with language code and country code (eg, Messages_pt_PT.properties)
+        if (settings.language.length >= 5) {
+          var longCode = settings.language.substring(0, 5);
+          if (languages.length > 0 && $.inArray(longCode, languages) != -1) {
+            loadAndParseFile(files[i] + '_' + longCode, settings);
+          }
         }
       }
-      // 3. with language code and country code (eg, Messages_pt_PT.properties)
-      if (settings.language.length >= 5) {
-        var longCode = settings.language.substring(0, 5);
-        if (languages.length > 0 && $.inArray(longCode, languages) != -1) {
-            loadAndParseFile(settings.path + files[i] + '_' + longCode + '.properties', settings);
-        }
-      }
-    }
 
-    // call callback
-    if (settings.callback) {
-      settings.callback();
+      // call callback
+      if (settings.callback) {
+        settings.callback();
+      }
     }
   };
 
@@ -264,16 +282,25 @@
 
   /** Load and parse .properties files */
   function loadAndParseFile(filename, settings) {
-    $.ajax({
-      url: filename,
-      async: false,
-      cache: settings.cache,
-      contentType: 'text/plain;charset=' + settings.encoding,
-      dataType: 'text',
-      success: function (data, status) {
-        parseData(data, settings.mode);
-      }
-    });
+    if (settings.pouch != null) {
+      var doc = settings.pouch_doc_prefix + filename
+      settings.pouch.get(doc).then(function (data) {
+        parseData(data.properties.join("\n"), settings.mode);
+      });
+    }
+
+    else {
+      $.ajax({
+        url: settings.path + filename + '.properties',
+        async: false,
+        cache: settings.cache,
+        contentType: 'text/plain;charset=' + settings.encoding,
+        dataType: 'text',
+        success: function (data, status) {
+          parseData(data, settings.mode);
+        }
+      });
+    }
   }
 
   /** Parse .properties files */
